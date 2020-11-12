@@ -20,8 +20,8 @@ class SumTree:
     write = 0
 
     def __init__(self, channels, capacity, device):
-        self.device = device
         self.capacity = capacity
+        self.device = device
         self.n_entries = 0
 
         self.tree = np.zeros(2 * capacity - 1)
@@ -151,7 +151,7 @@ class ReplayMemory(object):
         b_reward_list = []
         b_done_list = []
 
-        self.beta = np.min([1., self.beta + self.beta_increment_per_sampling])
+        self.beta = np.min([1.0 - self.e, self.beta + self.beta_increment_per_sampling])
         
         for i in range(batch_size):
             a = segment * i
@@ -159,6 +159,7 @@ class ReplayMemory(object):
 
             s = random.uniform(a, b)
             (idx, p, b_state, b_next, b_action, b_reward, b_done) = self.tree.get(s)
+
             idxs.append(idx)
             priorities.append(p)
 

@@ -70,11 +70,11 @@ for step in progressive:
     old_val = target[0][action]
     target_val = agent.target(torch.cat(list(obs_queue)[1:]).unsqueeze(0).to(device).float()).data
     if done:
-        target[0][action] = reward
+        target_val = reward
     else:
-        target[0][action] = reward + GAMMA * torch.max(target_val)
+        target_val = reward + GAMMA * torch.max(target_val)
 
-    error = abs(old_val - target[0][action]).cpu().data.numpy()
+    error = abs(old_val - target_val).cpu().data.numpy()
 
     memory.push(error, env.make_folded_state(obs_queue), action, reward, done)
 
