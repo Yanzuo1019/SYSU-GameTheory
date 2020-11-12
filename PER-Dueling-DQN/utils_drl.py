@@ -4,6 +4,7 @@ from typing import (
 
 import random
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 import torch.optim as optim
@@ -72,20 +73,34 @@ class Agent(object):
 
     def learn(self, memory: ReplayMemory, batch_size: int) -> float:
         """learn trains the value network via TD-learning."""
-        (state_batch, next_batch, action_batch, reward_batch, done_batch), idxs, is_weights = memory.sample(batch_size)
+        idxs, (state_batch, next_batch, action_batch, reward_batch, done_batch), is_weights = memory.sample(batch_size)
+
+        y_batch = []
+        current_Q_batch = self.policy(next_batch).cpu().data.numpy()
+        max_action_next = np.argmax(current_Q_batch, axis=1)
+        target_Q_batch = self.target(next_batch)
+        
+        for i in range(batch_size):
+            if done_batch[i]:
+                y_batch.append(reward_batch[i])
+            else:
+                target_Q_value = target_Q_batch[i, max_action_next[i]]
+                y_batch.append(reward_batch[i] + self.__gamma * target_Q_value)
+
+        y_batch = torch.stack(y_batch)
+        # print(y_batch.shape)
 
         values = self.policy(state_batch).gather(1, action_batch)
-        values_next = self.target(next_batch).max(1).values.detach()
-        expected = (self.__gamma * values_next.unsqueeze(1)) * \
-            (1. - done_batch) + reward_batch
+        # print(values.shape)
 
-        errors = torch.abs(values - expected).cpu().data.numpy()
-        for i in range(batch_size):
-            idx = idxs[i]
-            memory.update(idx, errors[i])
+        abs_error = torch.abs(y_batch - values)
+        memory.batch_update(idxs, abs_error)
+        # values_next = self.target(next_batch).max(1).values.detach()
+        # expected = (self.__gamma * values_next.unsqueeze(1)) * \
+        #     (1. - done_batch) + reward_batch
 
         # loss = F.smooth_l1_loss(values, expected)
-        loss = (torch.FloatTensor(is_weights).to(self.__device) * F.smooth_l1_loss(values, expected)).mean()
+        loss = (torch.FloatTensor(is_weights).to(self.__device) * F.mse_loss(values, y_batch)).mean()
 
         self.__optimizer.zero_grad()
         loss.backward()

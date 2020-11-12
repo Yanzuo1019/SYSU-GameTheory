@@ -17,81 +17,74 @@ from utils_types import (
 )
 
 class SumTree:
-    write = 0
+    data_pointer = 0
 
     def __init__(self, channels, capacity, device):
         self.capacity = capacity
         self.device = device
-        self.n_entries = 0
-
         self.tree = np.zeros(2 * capacity - 1)
+
         self.__m_states = torch.zeros(
             (capacity, channels, 84, 84), dtype=torch.uint8)
         self.__m_actions = torch.zeros((capacity, 1), dtype=torch.long)
         self.__m_rewards = torch.zeros((capacity, 1), dtype=torch.int8)
         self.__m_dones = torch.zeros((capacity, 1), dtype=torch.bool)
-    
-    def _propagate(self, idx, change):
-        parent = (idx - 1) // 2
-        self.tree[parent] += change
-        if parent != 0:
-            self._propagate(parent, change)
-    
-    def _retrieve(self, idx, s):
-        left = 2 * idx + 1
-        right = left + 1
-
-        if left >= len(self.tree):
-            return idx
-        
-        if s <= self.tree[left]:
-            return self._retrieve(left, s)
-        else:
-            return self._retrieve(right, s - self.tree[left])
-    
-    def total(self):
-        return self.tree[0]
 
     def add(self, p, folded_state, action, reward, done):
-        idx = self.write + self.capacity - 1
+        tree_idx = self.data_pointer + self.capacity - 1
 
-        self.__m_states[self.write] = folded_state
-        self.__m_actions[self.write] = action
-        self.__m_rewards[self.write] = reward
-        self.__m_dones[self.write] = done
-        self.update(idx, p)
+        self.__m_states[self.data_pointer] = folded_state
+        self.__m_actions[self.data_pointer] = action
+        self.__m_rewards[self.data_pointer] = reward
+        self.__m_dones[self.data_pointer] = done
+        self.update(tree_idx, p)
 
-        self.write += 1
-        if self.write >= self.capacity:
-            self.write = 0
-        if self.n_entries < self.capacity:
-            self.n_entries += 1
+        self.data_pointer += 1
+        if self.data_pointer >= self.capacity:
+            self.data_pointer = 0
     
     def update(self, idx, p):
         change = p - self.tree[idx]
         
         self.tree[idx] = p
-        self._propagate(idx, change)
+        while idx != 0:
+            idx = (idx - 1) // 2
+            self.tree[idx] += change
     
-    def get(self, s):
-        idx = self._retrieve(0, s)
-        dataIdx = idx - self.capacity + 1
+    def get_leaf(self, v):
+        parent_idx = 0
 
-        return (
-            idx, 
-            self.tree[idx], 
-            self.__m_states[dataIdx, :4].to(self.device).float(), 
-            self.__m_states[dataIdx, 1:].to(self.device).float(),
-            self.__m_actions[dataIdx].to(self.device),
-            self.__m_rewards[dataIdx].to(self.device).float(),
-            self.__m_dones[dataIdx].to(self.device).float()
-        )
+        while True:
+            cl_idx = 2 * parent_idx + 1
+            cr_idx = cl_idx + 1
+            if cl_idx >= len(self.tree):
+                leaf_idx = parent_idx
+                break
+            else:
+                if v <= self.tree[cl_idx]:
+                    parent_idx = cl_idx
+                else:
+                    v -= self.tree[cl_idx]
+                    parent_idx = cr_idx
+        
+        data_idx = leaf_idx - self.capacity + 1
+        return leaf_idx, self.tree[leaf_idx], \
+            self.__m_states[data_idx, :4].to(self.device).float(), \
+            self.__m_states[data_idx, 1:].to(self.device).float(), \
+            self.__m_actions[data_idx].to(self.device), \
+            self.__m_rewards[data_idx].to(self.device).float(), \
+            self.__m_dones[data_idx].to(self.device)
+    
+    @property
+    def total_p(self):
+        return self.tree[0]
 
 class ReplayMemory(object):
-    e = 0.01
-    a = 0.6
+    epsilon = 0.01
+    alpha = 0.6
     beta = 0.4
     beta_increment_per_sampling = 0.001
+    abs_err_upper = 1.0
 
     def __init__(
             self,
@@ -104,6 +97,7 @@ class ReplayMemory(object):
         # self.__size = 0
         # self.__pos = 0
 
+        self.entries = 0
         self.tree = SumTree(channels, capacity, device)
         # self.__m_states = torch.zeros(
         #     (capacity, channels, 84, 84), dtype=torch.uint8)
@@ -111,12 +105,8 @@ class ReplayMemory(object):
         # self.__m_rewards = torch.zeros((capacity, 1), dtype=torch.int8)
         # self.__m_dones = torch.zeros((capacity, 1), dtype=torch.bool)
 
-    def __get_priority(self, error):
-        return (np.abs(error) + self.e) ** self.a
-
     def push(
             self,
-            error,
             folded_state: TensorStack5,
             action: int,
             reward: int,
@@ -129,8 +119,11 @@ class ReplayMemory(object):
 
         # self.__pos = (self.__pos + 1) % self.__capacity
         # self.__size = max(self.__size, self.__pos)
-        p = self.__get_priority(error)
-        self.tree.add(p, folded_state, action, reward, done)
+        self.entries += 1
+        max_p = np.max(self.tree.tree[-self.tree.capacity:])
+        if max_p == 0:
+            max_p = self.abs_err_upper
+        self.tree.add(max_p, folded_state, action, reward, done)
 
     def sample(self, batch_size: int):
         # indices = torch.randint(0, high=self.__size, size=(batch_size,))
@@ -140,10 +133,9 @@ class ReplayMemory(object):
         # b_reward = self.__m_rewards[indices].to(self.__device).float()
         # b_done = self.__m_dones[indices].to(self.__device).float()
         # return b_state, b_action, b_reward, b_next, b_done
-        batch = []
-        idxs = []
-        segment = self.tree.total() / batch_size
-        priorities = []
+
+        idxs = np.empty((batch_size,), dtype=np.int32)
+        ISWeights = np.empty((batch_size, 1))
 
         b_state_list = []
         b_next_list = []
@@ -151,17 +143,23 @@ class ReplayMemory(object):
         b_reward_list = []
         b_done_list = []
 
-        self.beta = np.min([1.0 - self.e, self.beta + self.beta_increment_per_sampling])
+        pri_seg = self.tree.total_p / batch_size
+        self.beta = np.min([1., self.beta + self.beta_increment_per_sampling])
         
+        min_prob = np.min(self.tree.tree[-self.tree.capacity:]) / self.tree.total_p
+        if min_prob == 0:
+            min_prob = 0.00001
+
         for i in range(batch_size):
-            a = segment * i
-            b = segment * (i + 1)
+            a, b = pri_seg * i, pri_seg * (i + 1)
+            v = np.random.uniform(a, b)
+            
+            idx, p, b_state, b_next, b_action, b_reward, b_done = self.tree.get_leaf(v)
+            # print(b_state.shape, b_next.shape, b_action.shape, b_reward.shape, b_done.shape)
 
-            s = random.uniform(a, b)
-            (idx, p, b_state, b_next, b_action, b_reward, b_done) = self.tree.get(s)
-
-            idxs.append(idx)
-            priorities.append(p)
+            idxs[i] = idx
+            prob = p / self.tree.total_p
+            ISWeights[i, 0] = np.power(prob / min_prob, -self.beta)
 
             b_state_list.append(b_state)
             b_next_list.append(b_next)
@@ -175,17 +173,17 @@ class ReplayMemory(object):
         b_reward_list = torch.stack(b_reward_list)
         b_done_list = torch.stack(b_done_list)
 
+        # print(b_state_list.shape, b_next_list.shape, b_action_list.shape, b_reward_list.shape, b_done_list.shape)
         batch = (b_state_list, b_next_list, b_action_list, b_reward_list, b_done_list)
 
-        sampling_probabilities = priorities / self.tree.total()
-        is_weight = np.power(self.tree.n_entries * sampling_probabilities, -self.beta)
-        is_weight /= is_weight.max()
-
-        return batch, idxs, is_weight
+        return idxs, batch, ISWeights
     
-    def update(self, idx, error):
-        p = self.__get_priority(error)
-        self.tree.update(idx, p)
+    def batch_update(self, idx, error):
+        error += self.epsilon
+        clipped_error = np.minimum(error.cpu().data.numpy(), self.abs_err_upper)
+        ps = np.power(clipped_error, self.alpha)
+        for ti, p in zip(idx, ps):
+            self.tree.update(ti, p)
 
     def __len__(self) -> int:
-        return self.tree.n_entries
+        return self.entries
