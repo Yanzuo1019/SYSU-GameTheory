@@ -126,13 +126,6 @@ class ReplayMemory(object):
         self.tree.add(max_p, folded_state, action, reward, done)
 
     def sample(self, batch_size: int):
-        # indices = torch.randint(0, high=self.__size, size=(batch_size,))
-        # b_state = self.__m_states[indices, :4].to(self.__device).float()
-        # b_next = self.__m_states[indices, 1:].to(self.__device).float()
-        # b_action = self.__m_actions[indices].to(self.__device)
-        # b_reward = self.__m_rewards[indices].to(self.__device).float()
-        # b_done = self.__m_dones[indices].to(self.__device).float()
-        # return b_state, b_action, b_reward, b_next, b_done
 
         idxs = np.empty((batch_size,), dtype=np.int32)
         ISWeights = np.empty((batch_size, 1))
@@ -152,10 +145,12 @@ class ReplayMemory(object):
 
         for i in range(batch_size):
             a, b = pri_seg * i, pri_seg * (i + 1)
-            v = np.random.uniform(a, b)
-            
-            idx, p, b_state, b_next, b_action, b_reward, b_done = self.tree.get_leaf(v)
-            # print(b_state.shape, b_next.shape, b_action.shape, b_reward.shape, b_done.shape)
+
+            while True:
+                v = np.random.uniform(a, b)
+                idx, p, b_state, b_next, b_action, b_reward, b_done = self.tree.get_leaf(v)
+                if p != 0.0:
+                    break
 
             idxs[i] = idx
             prob = p / self.tree.total_p
@@ -173,7 +168,6 @@ class ReplayMemory(object):
         b_reward_list = torch.stack(b_reward_list)
         b_done_list = torch.stack(b_done_list)
 
-        # print(b_state_list.shape, b_next_list.shape, b_action_list.shape, b_reward_list.shape, b_done_list.shape)
         batch = (b_state_list, b_next_list, b_action_list, b_reward_list, b_done_list)
 
         return idxs, batch, ISWeights

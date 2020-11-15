@@ -17,7 +17,7 @@ RENDER = False
 SAVE_PREFIX = "./models"
 STACK_SIZE = 4
 
-EPS_START = 1.
+EPS_START = 0.1
 EPS_END = 0.1
 EPS_DECAY = 1000000
 
@@ -45,7 +45,9 @@ agent = Agent(
     EPS_START,
     EPS_END,
     EPS_DECAY,
+    restore="model_499"
 )
+# print(list(agent.policy.parameters()))
 memory = ReplayMemory(STACK_SIZE + 1, MEM_SIZE, device)
 
 #### Training ####
