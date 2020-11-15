@@ -88,18 +88,11 @@ class Agent(object):
                 y_batch.append(reward_batch[i] + self.__gamma * target_Q_value)
 
         y_batch = torch.stack(y_batch)
-        # print(y_batch.shape)
-
         values = self.policy(state_batch).gather(1, action_batch)
-        # print(values.shape)
 
         abs_error = torch.abs(y_batch - values)
         memory.batch_update(idxs, abs_error)
-        # values_next = self.target(next_batch).max(1).values.detach()
-        # expected = (self.__gamma * values_next.unsqueeze(1)) * \
-        #     (1. - done_batch) + reward_batch
 
-        # loss = F.smooth_l1_loss(values, expected)
         loss = (torch.FloatTensor(is_weights).to(self.__device) * F.mse_loss(values, y_batch)).mean()
 
         self.__optimizer.zero_grad()

@@ -68,16 +68,6 @@ for step in progressive:
     obs, reward, done = env.step(action)
     obs_queue.append(obs)
 
-    # target = agent.policy(torch.cat(list(obs_queue)[:4]).unsqueeze(0).to(device).float()).data
-    # old_val = target[0][action]
-    # target_val = agent.target(torch.cat(list(obs_queue)[1:]).unsqueeze(0).to(device).float()).data
-    # if done:
-    #     target_val = reward
-    # else:
-    #     target_val = reward + GAMMA * torch.max(target_val)
-
-    # error = abs(old_val - target_val).cpu().data.numpy()
-
     memory.push(env.make_folded_state(obs_queue), action, reward, done)
 
     if step % POLICY_UPDATE == 0 and training:
